@@ -14,13 +14,14 @@ Solved using System V IPC (semaphors and shared memory)
 #include <sys/sem.h>
 #include <sys/wait.h>
 
-int sem_widelcy;    //semafory widelcy
-int sem_glodomorow; //semafory glodomorow
-int start;      //semafor poczatku uczty
-int shmid[6];   //tablica id shared memory
-int* bufshm[6]; //tablica wskaznikow na bufory shared memory
+int sem_widelcy;    //fork semaphores
+int sem_glodomorow; //philospher semaphores
+int start;      //dining start semaphore
+int shmid[6];   //shared memory id table
+int* bufshm[6]; //table of pointers to shm buffers
 struct sembuf op;
 
+//semaphore up
 void podnies(int semid, int semnum){
    op.sem_num = semnum;
    op.sem_op = 1;
@@ -28,6 +29,7 @@ void podnies(int semid, int semnum){
    semop(semid, &op, 1);
 }
 
+//semaphore down
 void opusc(int semid, int semnum){
    op.sem_num = semnum;
    op.sem_op = -1;
@@ -35,19 +37,20 @@ void opusc(int semid, int semnum){
    semop(semid, &op, 1);
 }
 
+//philospher function
 int glodomor(int n){
 
     int prawy, lewy;
     op.sem_flg = 0;
 
-    //losowanie czasu
+    //random time
     unsigned int seed, random_wait;
     seed = time(NULL) ^ getpid() ^ n;
-    random_wait = rand_r(&seed)%500000; //losowe mikrosekundy, max pol sekundy
+    random_wait = rand_r(&seed)%500000;
 
-    //przypisanie widelcow z prawej i z lewej
-    //przy czym ostatni (5-ty) glodomor ma zamienione numery widelcow
-    //ta zamiana dla ostatniego pozwala na zapobieganie zakleszczeniom
+    //giving forks to right and left
+    //the last philospher (5th) has reversed fork numbers
+    //this prevents deadlocks
     if(n == 1){
         prawy = 1;
         lewy = 5;
@@ -62,164 +65,159 @@ int glodomor(int n){
         lewy = n-1;
     }
 
-    //poinformowanie przez semafor, ze glodomor jest gotowy
+    //informing through a semaphore that a philosopher is ready
     opusc(start, 0);
-    printf("Glodomor_%d\t przy stole\n", n);
+    printf("Philosopher_%d\t at the table\n", n);
 
-    //sprawdzenie, czy pozostali sa gotowi
+    //checking if the rest is ready
     op.sem_op = 0;
     op.sem_num = 0;
     semop(start, &op, 1);
 
-    int zjadl=0; //priorytet
-    //petla glowna
+    int zjadl=0; //priority
+    //main loop
     while(zjadl < 5){
         //printf("Glodomor_%d\t przygotowuje sie\n", n);
 
-        //rozwiazanie z hierarchia zasobow i priorytetami
+        //solution with priorities and resource hiarchy
 
-        //podanie swojego priorytetu w shm
+        //giving a priority with shm
         opusc(sem_glodomorow, n);
         *bufshm[n] = zjadl;
         podnies(sem_glodomorow, n);
 
-        //pobranie lewego widelca
+        //taking the left fork
         opusc(sem_widelcy, lewy);
         //printf("Glodomor_%d\t ma widelec %d\n", n, lewy);
 
-        //sprawdzenie priorytetu lewego sasiada
+        //checking the left neighbour's priority
         opusc(sem_glodomorow, lewy);
 
         if(*bufshm[lewy] == -1 || *bufshm[lewy] >= zjadl){
-            //konkurent z lewej nie chce wcale lub zjadl wiecej lub tyle samo (nizszy priorytet)
-            //czyli mozemy leciec dalej
-            //zwalnia semafor sprawdzania priorytetu lewego sasiada
+            //the left neighbour doesn't want to eat or has eaten more or the same (lower priority)
+            //so we can continue
             podnies(sem_glodomorow, lewy);
         }
         else{
-            //konkurent z lewej zjadl mniej (ma wyzszy priorytet)
-            //obecny glodomor sie wycofuje
+            //the left neighbour has eaten less (higher priority)
+            //current philosopher stops
 
-            //podanie swojego priorytetu w shm jako -1 (niezainteresowany)
+            //stating this philosophers priority in shm as -1 (uninteresed)
             podnies(sem_glodomorow, n);
             *bufshm[n] = -1;
             opusc(sem_glodomorow, n);
 
-            //zwalnia semafor sprawdzania priorytetu lewego sasiada
+            //freeing the left negihbour's priority semaphore
             podnies(sem_glodomorow, lewy);
 
-            //oddaje lewy widelec
+            //letting go of left fork
             podnies(sem_widelcy, lewy);
 
-            //przechodzi do nastepnej iteracji petli
             continue;
         }
 
-        //pobranie prawego widelca
+        //taking the right fork
         opusc(sem_widelcy, prawy);
         //printf("Glodomor_%d\t ma widelec %d\n", n, prawy);
 
-        //sprawdzenie priorytetu prawego sasiada
+        //checking the right neighbour's priority
         opusc(sem_glodomorow, prawy);
 
         if(*bufshm[prawy] == -1 || *bufshm[prawy] >= zjadl){
-            //konkurent z prawej nie chce wcale lub zjadl wiecej lub tyle samo (nizszy priorytet)
-            //czyli mozemy leciec dalej
-            //zwalnia semafor sprawdzania priorytetu prawego sasiada
+            //the right neighbour doesn't want to eat or has eaten more or the same (lower priority)
+            //so we can continue
             podnies(sem_glodomorow, prawy);
         }
         else{
-            //konkurent z prawej zjadl mniej (ma wyzszy priorytet)
-            //obecny glodomor sie wycofuje
+            //the right neighbour has eaten less (higher priority)
+            //current philosopher stops
 
-            //podanie swojego priorytetu w shm jako -1 (niezainteresowany)
+           //stating this philosophers priority in shm as -1 (uninteresed)
             opusc(sem_glodomorow, n);
             *bufshm[n] = -1;
             podnies(sem_glodomorow, n);
 
-            //zwalnia semafor sprawdzania priorytetu prawego sasiada
+            //freeing the left negihbour's priority semaphore
             podnies(sem_glodomorow, prawy);
 
-            //oddaje prawy widelec
+            //letting go of right fork
             podnies(sem_widelcy, prawy);
 
-            //oddaje lewy widelec
+            //letting go of left fork
             podnies(sem_widelcy, lewy);
 
-            //przechodzi do nastepnej iteracji petli
             continue;
         }
-        //widelce i priorytety ok - mozna jesc
+        //forks and priorities are ok - our philosopher can eat!
 
-        //zjadanie w wylosowanym czasie
+        //eating in random time
         usleep(random_wait);
         zjadl++;
-        printf("Glodomor_%d\t zjadl porcje nr %d\n", n, zjadl);
+        printf("Philosopher_%d\t has eaten portion number %d\n", n, zjadl);
 
-        //podanie swojego priorytetu w shm jako -1 (niezainteresowany)
+        //stating this philosophers priority in shm as -1 (uninteresed)
         opusc(sem_glodomorow, n);
         *bufshm[n] = -1;
         podnies(sem_glodomorow, n);
 
-        //odlozenie prawego widelca
+        //letting go of right fork
         podnies(sem_widelcy, prawy);
 
-        //odlozenie lewego widelca
+        //letting go of left fork
         podnies(sem_widelcy, lewy);
     }
 
-    printf("Glodomor_%d\t skonczyl - zjadl %d porcji\n", n, zjadl);
+    printf("Philosopher_%d\t has finished eating %d protions\n", n, zjadl);
 
     exit(n);
 }
 
 int main(){
     int i, pid, tmp, status;
-    pid_t glod[6]; //tablica PID-ow potomkow
+    pid_t glod[6]; //PID table of children
 
-    //inicjalizacja semaforow widelcy
-    //6 sztuk
-    //0 nieuzywany, 1-5 semafory widelcow
+    //initializing 6 fork semaphores
+    //0 is unused, 1-5 are used
     sem_widelcy = semget(IPC_PRIVATE, 6, IPC_CREAT|0600);
     for(i=1; i<=5; i++){
         semctl(sem_widelcy, i, SETVAL, 1);
     }
-    //inicjalizacja semafora startu
+    //initializing start semaphore
     start = semget(IPC_PRIVATE, 1, IPC_CREAT|0600);
     semctl(start, 0, SETVAL, 5);
 
-    //inicjalizacja semaforow glodomorow (priorytety)
-    //0 nieuzywany, 1-5 semafory glodomorow do sprawdzania priorytetow
+    //initializing philosopher priority semaphores
+    //0 is unused, 1-5 are used
     sem_glodomorow = semget(IPC_PRIVATE, 6, IPC_CREAT|0600);
     for(i=1; i<=5; i++){
         semctl(sem_glodomorow, i, SETVAL, 1);
     }
 
-    //tworze 5 segmentow pamieci wspoldzielonej do priorytetow
+    //creating 5 shared memory segments for priorities
     for(i=1; i<=5; i++){
         shmid[i] = shmget(IPC_PRIVATE, sizeof(int), IPC_CREAT|0600);
         bufshm[i] = (int*)shmat(shmid[i], NULL, 0);
-        *bufshm[i] = -1; //poczatkowo zaden glodomor nie jest chetny
+        *bufshm[i] = -1; //initially all philosophers do not want to eat
     }
 
-    //generacja procesow glodomorow
+    //generating philosopher processes
     for(i=1; i<=5; i++){
         pid = fork();
-        if(pid == 0){   //potomek
-            tmp = glodomor(i);  //potomek uruchamia funkcje glodomora
-            exit(tmp);          //a gdy ja zakonczy, to sie zakancza
+        if(pid == 0){   //child
+            tmp = glodomor(i);  //child runs philosopher function
+            exit(tmp);          //when its finished, then it finishes
         }
-        else{   //macierzysty
+        else{   //father
             glod[i] = pid;
         }
     }
 
-    //oczekiwanie na zakonczenie wszystkich glodomorow
+    //waiting for the completion of all philosophers
     for(i=1; i<=5; i++){
         waitpid(glod[i], &status, 0);
     }
 
-    //usuniece semaforow
+    //removing semaphores
     semctl(sem_widelcy, 0, IPC_RMID, 0);
     semctl(sem_glodomorow, 0, IPC_RMID, 0);
     semctl(start, 0, IPC_RMID, 0);
